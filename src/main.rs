@@ -1,13 +1,14 @@
-use std::env;
+use std::{env, io};
 
-use warp::Filter;
 use log::{warn, error, info};
 
 mod routes;
 mod utils;
 
+mod app_structs;
+
 #[tokio::main]
-async fn main() {
+async fn main() -> io::Result<()> {
     let _ = simplelog::TermLogger::init(simplelog::LevelFilter::Info, simplelog::Config::default(), simplelog::TerminalMode::Mixed, simplelog::ColorChoice::Auto);
 
     match dotenv::dotenv() {
@@ -23,57 +24,66 @@ async fn main() {
         }
     }
 
-    let mut mysql_conn = utils::mysql::init_mysql();
+    let mut mysql = utils::mysql::init_mysql();
+    let session_map = utils::session::create_session_map();
 
-    match utils::mysql::check_if_db_is_setup(&mut mysql_conn) {
+    match utils::mysql::check_if_db_is_setup(&mut mysql) {
         true => info!("DB seems to be already setup"),
         false => {
             error!("DB is NOT setup! place init.sql in db");
             panic!();
         }
     }
-    
+
+    let app_data = app_structs::AppData {
+        mysql,
+        session_map
+    };
 
 
-    let mysql_filter = utils::mysql::create_mysql_filter(mysql_conn);    
-    let remote_filter = warp::filters::addr::remote();
-    let session_map_filter = utils::session::create_session_filter();
-    let session_map = warp::filters::cookie::optional("SESSION");
+    actix_web::HttpServer::new(
+        move || actix_web::App::new()
+            .app_data(app_data.clone())
+            .service(
+                actix_web::web::resource("/loginState")
+                    .route(actix_web::web::get().to(routes::check_login_state::execute))
+            )
+            .service(
+                actix_web::web::resource("/login")
+                    .route(actix_web::web::post().to(routes::login::execute))
+            )
+            .service(
+                actix_web::web::resource("/targets")
+                    .route(actix_web::web::get().to(routes::targets::execute))
+            )
+            .service(
+                actix_web::web::resource("/contents/{target_id}/{path}")
+                    .route(actix_web::web::get().to(routes::contents::execute))
+            )
+            .service(
+                actix_web::web::resource("/download/{target_id}/{path}")
+                    .route(actix_web::web::get().to(routes::download::execute))
+            )
+            .service(
+                actix_web::web::resource("/createTarget")
+                    .route(actix_web::web::post().to(routes::create_target::execute))
+            )
+            .service(
+                actix_web::web::resource("/directories/{path}")
+                    .route(actix_web::web::get().to(routes::directory_list::execute))
+            )
+            .service(
+                actix_web::web::resource("/logout")
+                    .route(actix_web::web::get().to(routes::logout::execute))
+            )
+            .service(
+                actix_web::web::resource("/upload/{target_id}/{path}")
+                    .route(actix_web::web::post().to(routes::upload::execute))
+            )
+            .default_service(
+                actix_web::web::to(routes::not_found::execute)
+            )
+    ).bind(("127.0.0.1",3030))?.run().await?;
 
-    let info_filters = mysql_filter.and(remote_filter).and(session_map_filter).and(session_map);
-
-    let check_login_state_route = warp::filters::method::get()
-        .and(warp::path("loginState"))
-        .and(warp::path::end())
-        .and(info_filters.clone())
-        .then(routes::check_login_state::execute);
-
-
-    let login_route = warp::filters::method::post()
-        .and(warp::path("login"))
-        .and(warp::path::end())
-        .and(info_filters.clone())
-        .and(warp::body::bytes())
-        .then(routes::login::execute);
-
-    let logout_route = warp::filters::method::get()
-        .and(warp::path("logout"))
-        .and(warp::path::end())
-        .and(info_filters.clone())
-        .then(routes::logout::execute);
-
-    let get_targets_route = warp::filters::method::get()
-        .and(warp::path("targets"))
-        .and(warp::path::end())
-        .and(info_filters.clone())
-        .then(routes::targets::execute);
-
-    let routes = check_login_state_route
-        .or(login_route)
-        .or(logout_route)
-        .or(get_targets_route);
-
-    warp::serve(routes)
-        .run(([127, 0, 0, 1], 3030))
-        .await;
+    Ok(())
 }
