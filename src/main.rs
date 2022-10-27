@@ -1,4 +1,4 @@
-use std::{env, io};
+use std::{env, io, net::SocketAddr};
 
 use log::{warn, error, info};
 
@@ -23,6 +23,22 @@ async fn main() -> io::Result<()> {
             panic!();
         }
     }
+
+    let listen_address = match env::var("LISTEN_ADDRESS") {
+        Ok(r) => r,
+        Err(_) => {
+            error!("Error loading LISTEN_ADDRESS env var. Bailing");
+            panic!();
+        }
+    };
+
+    let socketaddr: SocketAddr = match listen_address.parse() {
+        Ok(r) => r,
+        Err(_) => {
+            error!("Unable to parse LISTEN_ADDRESS env var. Bailing");
+            panic!();
+        }
+    };
 
     let mut mysql = utils::mysql::init_mysql();
     let session_map = utils::session::create_session_map();
@@ -83,7 +99,7 @@ async fn main() -> io::Result<()> {
             .default_service(
                 actix_web::web::to(routes::not_found::execute)
             )
-    ).bind(("127.0.0.1",3030))?.run().await?;
+    ).bind(socketaddr)?.run().await?;
 
     Ok(())
 }
